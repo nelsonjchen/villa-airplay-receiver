@@ -11,3 +11,5 @@
 
 *.jks
 app/baseline-native/
+
+.kotlin/

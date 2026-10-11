@@ -5,6 +5,28 @@ An Android TV AirPlay receiver fork tuned for the Sony TV at Villa. Based on
 v0.0.31 (`c8defdd`), using [UxPlay](https://github.com/FDH2/UxPlay).
 The app label and advertised AirPlay/mDNS name are **Villa AirPlay Receiver**.
 
+## Before and after
+
+**Before: roughly 1–2 seconds behind the Mac. After: much more responsive,
+with audio sync the user found acceptable.** Tested on a **2016 Sony BRAVIA
+XBR-65X750D**; this is tuning for that TV, not a claim about all Android TVs.
+
+| | Original high-resolution setup | Tuned 1080p setup |
+| --- | --- | --- |
+| Experience | Noticeable 1–2 second lag | User reported substantially better responsiveness |
+| Receiver-local timing | Roughly 800–1,000 ms callback-to-output residence | Typical window median around 73 ms; typical window p95 around 157 ms |
+| Stability | Growing arrival delay | 30-minute run without sustained delay buildup or logged codec errors |
+| Audio sync | No quantified baseline | User judged the flash/tone check close enough to be acceptable |
+
+The main improvement came with **1080p/up-to-60-FPS configuration and decoder
+scheduling changes**. Their separate contributions were not isolated. The
+numbers above measure time inside the receiver, **not screen-to-screen delay**;
+physical latency remains unmeasured and occasional spikes remain.
+
+A subsequent output-polling experiment showed a smaller, tentative improvement
+(67→57 ms typical window median). That is a separate comparison, described
+below—not the full before/after improvement.
+
 ## Target TV
 
 Tested on the **Sony BRAVIA XBR-65X750D**, a **65-inch 4K TV from the 2016
@@ -20,15 +42,6 @@ This fork's tuning has not been validated on other TVs.
 The working receiver configuration advertises **1920×1080, up to 60 FPS**.
 The latest Mac mirroring session actually encoded **1662×1080 H.264**, matching
 its mirrored desktop aspect ratio. Screen video uses **TCP**.
-
-## Why this fork exists
-
-The original high-resolution setup felt roughly 1–2 seconds behind the Mac.
-Receiver instrumentation showed roughly 0.8–1.0 seconds between arrival at the
-video callback and collecting decoded output, with growing arrival delay.
-We retained a lower-resolution configuration and changed decoder scheduling to
-reduce buffering. The user reported substantially better responsiveness and
-acceptable approximate audio sync.
 
 ## Changes from upstream
 

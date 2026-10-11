@@ -1,6 +1,6 @@
 # Working rules
 
-- This is the Villa AirPlay Receiver app fork. Investigation notes and rollback artifacts live in /Users/nelson/code/airplay-receiver-lab; consult its docs before device experiments.
+- This is the Villa AirPlay Receiver app fork. Investigation notes and rollback artifacts live in the separate local airplay-receiver-lab workspace; consult its docs before device experiments.
 - Distinguish measurements, source observations, hypotheses, and upstream reports.
 - Back up settings and installed APKs before changing them. Record rollback.
 - Never equate advertising HEVC with sending HEVC, or TCP with proven latency causation.

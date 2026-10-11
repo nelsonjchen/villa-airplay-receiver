@@ -13,3 +13,6 @@
 app/baseline-native/
 
 .kotlin/
+
+# Private investigation evidence and local artifacts
+.local/

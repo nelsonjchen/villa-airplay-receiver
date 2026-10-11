@@ -7,10 +7,14 @@ The app label and advertised AirPlay/mDNS name are **Villa AirPlay Receiver**.
 
 ## Target TV
 
-Tested on a Sony reporting **BRAVIA 4K GB**, device **BRAVIA_ATV2**, running
-**Android 9**, with a **32-bit ARM (`armeabi-v7a`)** app runtime. Video uses the
-MediaTek hardware decoder **OMX.MTK.VIDEO.DECODER.AVC**. These are the device's
-reported identifiers; the exact retail model number has not been established.
+Tested on the **Sony BRAVIA XBR-65X750D**, a **65-inch 4K TV from the 2016
+model year** ([Sony specifications](https://www.sony-latin.com/es/electronics/support/televisions-projectors-lcd-tvs-android-/xbr-65x750d/specifications)).
+The exact retail model was verified through Sony's System Information screen
+opened over ADB; Android's generic model property only reports **BRAVIA 4K GB**.
+
+The target runs **Android 9**, firmware **PKG6.7220.0365NAA**, on the
+**BRAVIA_ATV2** platform with a **32-bit ARM (`armeabi-v7a`)** app runtime.
+Video uses the MediaTek hardware decoder **OMX.MTK.VIDEO.DECODER.AVC**.
 This fork's tuning has not been validated on other TVs.
 
 The working receiver configuration advertises **1920×1080, up to 60 FPS**.

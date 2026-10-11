@@ -124,6 +124,12 @@ the TV, preserve its installed APK and preferences so a failed experiment can
 be rolled back. The polling experiment can be disabled by restoring the prior
 preferences and restarting the receiver.
 
+## Development
+
+The Villa fork was developed with **GPT-6 Astra** in Codex, including the
+Sony TV investigation, latency experiments, implementation changes, and
+documentation. Measurements and remaining limitations are described above.
+
 ## License and credits
 
 GPLv3; see [LICENSE](LICENSE). Original Android receiver by

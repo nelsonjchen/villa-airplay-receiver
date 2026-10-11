@@ -4,14 +4,62 @@ import android.content.Context
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
+import android.os.Bundle
 import android.util.Log
+import android.util.Base64
 import android.view.Surface
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.TimeUnit
 import io.github.jqssun.airplay.renderer.DecoderSelector.Companion.videoCaps
 
 class VideoRenderer(ctx: Context) {
+    private val pollOutput by lazy {
+        ctx.getSharedPreferences("settings", Context.MODE_PRIVATE)
+            .getBoolean("lab_output_poll", false)
+    }
+    private var outputExecutor: ScheduledExecutorService? = null
+    private var outputPoll: ScheduledFuture<*>? = null
+    private val captureHeaders by lazy { ctx.packageName.endsWith(".lab") }
+    private var headersLogged = false
+
+    // Opt-in experiment only; keep this separate from the resolution comparison.
+    private val sonyOutputPath by lazy {
+        ctx.getSharedPreferences("settings", Context.MODE_PRIVATE)
+            .getBoolean("lab_sony_output_path", false)
+    }
+    private val useWorker by lazy {
+        ctx.getSharedPreferences("settings", Context.MODE_PRIVATE).getBoolean("lab_decoder_worker", false)
+    }
+    private val directSurface by lazy {
+        ctx.getSharedPreferences("settings", Context.MODE_PRIVATE).getBoolean("lab_direct_surface", false)
+    }
+    private val sonyFormatPath by lazy {
+        ctx.getSharedPreferences("settings", Context.MODE_PRIVATE).getBoolean("lab_sony_format_path", false)
+    }
+    private data class Frame(val data: ByteArray, val ptsNs: Long, val hevc: Boolean, val arrivalNs: Long)
+    private var workerDelegate: Lazy<BoundedFrameWorker<Frame>> = createWorker()
+    private fun createWorker(): Lazy<BoundedFrameWorker<Frame>> = lazy {
+        BoundedFrameWorker<Frame>(8, { frame, token ->
+            synchronized(lock) {
+                if (workerDelegate.value.current(token)) {
+                    processFrame(frame.data, frame.ptsNs, frame.hevc, frame.arrivalNs)
+                }
+            }
+        }, {
+            synchronized(lock) {
+                try { drainOutput() } catch (e: Exception) {
+                    Log.w(TAG, "Worker drain failed", e)
+                    stopCodec()
+                }
+            }
+        })
+    }
 
     private val lock = Object()
     private val pipeline = VideoPipeline()
+    private val timing = VideoTimingProbe()
     val selector = DecoderSelector(ctx)
     private var avcDecoder: MediaCodecInfo? = null
     private var hevcDecoder: MediaCodecInfo? = null
@@ -55,14 +103,30 @@ class VideoRenderer(ctx: Context) {
 
     // doesn't restart codec; decoder renders into pipeline's own persistent surface
     fun setSurface(surface: Surface) = synchronized(lock) {
+        if (directSurface && displaySurface === surface) return@synchronized
         displaySurface = surface
-        pipeline.setDisplaySurface(surface)
+        if (directSurface) {
+            codec?.let { c ->
+                try {
+                    c.setOutputSurface(surface)
+                    Log.i(TAG, "Decoder surface switched to direct display")
+                }
+                catch (e: Exception) { Log.w(TAG, "Direct surface switch failed", e); stopCodec() }
+            }
+        } else pipeline.setDisplaySurface(surface)
     }
 
     fun clearSurface(surface: Surface) = synchronized(lock) {
         if (displaySurface !== surface) return@synchronized
         displaySurface = null
-        pipeline.setDisplaySurface(null)
+        if (directSurface) {
+            // Keep consuming into the persistent fallback while Compose replaces a SurfaceView.
+            val fallback = pipeline.inputSurface
+            codec?.let { c ->
+                try { if (fallback != null) c.setOutputSurface(fallback) else stopCodec() }
+                catch (e: Exception) { Log.w(TAG, "Fallback surface switch failed", e); stopCodec() }
+            }
+        } else pipeline.setDisplaySurface(null)
     }
 
     fun selectDecoders(w: Int, h: Int, fps: Int, h265: Boolean): Boolean = synchronized(lock) {
@@ -70,6 +134,14 @@ class VideoRenderer(ctx: Context) {
         hevcDecoder = if (h265) selector.hevc(avcDecoder, w, h, fps) else null
         maxFps = fps
         Log.i(TAG, "decoders: avc=${avcDecoder?.name} hevc=${hevcDecoder?.name}")
+        avcDecoder?.let { info ->
+            runCatching {
+                val caps = info.videoCaps(DecoderSelector.AVC)
+                Log.i(TAG, "AVC limits: size=${caps.supportedWidths}x${caps.supportedHeights} " +
+                    "requested=${w}x${h}@$fps supported=${caps.areSizeAndRateSupported(w, h, fps.toDouble())} " +
+                    "achievable=${caps.getAchievableFrameRatesFor(w, h)}")
+            }.onFailure { Log.i(TAG, "AVC limits unavailable for ${w}x$h: ${it.message}") }
+        }
         hevcDecoder != null
     }
 
@@ -83,9 +155,17 @@ class VideoRenderer(ctx: Context) {
             .reduceOrNull { (w1, h1), (w2, h2) -> minOf(w1, w2) to minOf(h1, h2) } ?: (1920 to 1080)
 
     // codec per mirror session; pipeline persists across sessions
-    fun startSession() = synchronized(lock) { _resetStats() }
+    fun startSession() = synchronized(lock) {
+        _resetStats()
+        headersLogged = false
+        if (useWorker) workerDelegate.value.session(true)
+        Log.i(TAG, "Decoder scheduling: ${if (useWorker) "bounded worker (8 frames)" else "inline"}")
+    }
 
-    fun stopSession() = synchronized(lock) { stopCodec() }
+    fun stopSession() = synchronized(lock) {
+        if (workerDelegate.isInitialized()) workerDelegate.value.session(false)
+        stopCodec()
+    }
 
     private fun _resetStats() {
         fps = 0; bitrateBps = 0; frameCount = 0; codecName = ""
@@ -119,7 +199,38 @@ class VideoRenderer(ctx: Context) {
     }
 
     fun feedFrame(data: ByteArray, ntpTimeNs: Long, isH265: Boolean) {
+        val arrivalNs = System.nanoTime()
+        if (useWorker) {
+            workerDelegate.value.submit(Frame(data.copyOf(), ntpTimeNs, isH265, arrivalNs))
+        } else processFrame(data, ntpTimeNs, isH265, arrivalNs)
+    }
+
+    private fun processFrame(data: ByteArray, ntpTimeNs: Long, isH265: Boolean, arrivalNs: Long) {
         synchronized(lock) {
+            if (captureHeaders && !headersLogged && !isH265) {
+                // Parameter sets describe the stream; never log compressed picture data.
+                var foundSps = false
+                var pos = 0
+                while (pos + 4 < data.size) {
+                    val start = when {
+                        data[pos] == 0.toByte() && data[pos+1] == 0.toByte() && data[pos+2] == 1.toByte() -> pos + 3
+                        data[pos] == 0.toByte() && data[pos+1] == 0.toByte() && data[pos+2] == 0.toByte() && data[pos+3] == 1.toByte() -> pos + 4
+                        else -> { pos++; continue }
+                    }
+                    var end = start + 1
+                    while (end + 2 < data.size && !(data[end] == 0.toByte() && data[end+1] == 0.toByte() &&
+                        (data[end+2] == 1.toByte() || (end+3 < data.size && data[end+2] == 0.toByte() && data[end+3] == 1.toByte())))) end++
+                    if (end + 2 >= data.size) end = data.size
+                    val type = data[start].toInt() and 31
+                    if ((type == 7 || type == 8) && end - start <= 1024) {
+                        Log.i(TAG, "AVC_PARAMETER_SET type=$type base64=${Base64.encodeToString(data.copyOfRange(start, end), Base64.NO_WRAP)}")
+                        if (type == 7) foundSps = true
+                    }
+                    pos = end
+                }
+                headersLogged = foundSps
+            }
+            timing.arrival(ntpTimeNs / 1000, arrivalNs)
             _updateStats(data.size)
             if (videoWidth == 0 || videoHeight == 0) return
 
@@ -139,6 +250,8 @@ class VideoRenderer(ctx: Context) {
             } catch (e: Exception) {
                 Log.w(TAG, "Codec error, resetting", e)
                 stopCodec()
+            } finally {
+                timing.callbackFinished(arrivalNs)
             }
         }
     }
@@ -148,12 +261,17 @@ class VideoRenderer(ctx: Context) {
         // dropping a frame desyncs decoder until the next keyframe, but source would only send one on (re)connect
         val retries = if (firstFrameQueued) FEED_RETRIES else FIRST_FEED_RETRIES
         repeat(retries) {
+            // Return decoded buffers before asking the codec for another input slot.
+            drainOutput()
+            val waitStart = System.nanoTime()
             val idx = c.dequeueInputBuffer(FEED_WAIT_US)
+            timing.inputWait(System.nanoTime() - waitStart)
             if (idx >= 0) {
                 val buf = c.getInputBuffer(idx) ?: return
                 buf.clear()
                 buf.put(data)
                 c.queueInputBuffer(idx, 0, data.size, ntpTimeNs / 1000, 0)
+                timing.queued(ntpTimeNs / 1000)
                 firstFrameQueued = true
                 return
             }
@@ -186,7 +304,9 @@ class VideoRenderer(ctx: Context) {
     private fun startCodec(h265: Boolean) {
         pipeline.start()
         pipeline.setVideoSize(videoWidth, videoHeight)
-        val s = pipeline.inputSurface ?: return
+        val s = (if (directSurface) displaySurface?.takeIf { it.isValid } else null)
+            ?: pipeline.inputSurface ?: return
+        Log.i(TAG, "Decoder surface: ${if (directSurface && s === displaySurface) "direct display" else "GL pipeline"}")
         currentH265 = h265
         val mime = if (h265) DecoderSelector.HEVC else DecoderSelector.AVC
         val info = (if (h265) hevcDecoder else avcDecoder) ?: error("no decoder selected for $mime")
@@ -220,6 +340,11 @@ class VideoRenderer(ctx: Context) {
     }
 
     private fun _format(mime: String, info: MediaCodecInfo) = MediaFormat.createVideoFormat(mime, videoWidth, videoHeight).apply {
+        if (sonyFormatPath && info.name.startsWith("OMX.MTK.", ignoreCase = true)) {
+            // This TV's MtkMediaCodecPlugin.configure reads an integer, unlike setParameters.
+            // 0x100 is the plugin's OUTPUT_VIDEO_MAIN value; actual routing still needs validation.
+            setInteger("X-tv-output-path", 0x100)
+        }
         setInteger(MediaFormat.KEY_FRAME_RATE, maxFps)
         if (selector.adaptive(info, mime)) {
             setInteger(MediaFormat.KEY_MAX_WIDTH, videoWidth)
@@ -238,6 +363,15 @@ class VideoRenderer(ctx: Context) {
 
     private fun _startDecoder(c: MediaCodec, format: MediaFormat, surface: Surface, h265: Boolean) {
         try {
+            if (sonyOutputPath && c.name.startsWith("OMX.MTK.", ignoreCase = true)) {
+                // Same key/value and ordering observed in Sony 6.6053's native renderer.
+                // Acceptance does not prove that the vendor actually changes output paths.
+                runCatching {
+                    c.setParameters(Bundle().apply { putString("X-tv-output-path", "OUTPUT_VIDEO_MAIN") })
+                }.onSuccess { Log.i(TAG, "Sony output-path request accepted by API") }
+                    .onFailure { Log.w(TAG, "Sony output-path request rejected; using normal surface", it) }
+            }
+            Log.i(TAG, "Configuring ${c.name}: $format")
             c.configure(format, surface, null, 0)
             c.start()
         } catch (e: Exception) {
@@ -246,9 +380,30 @@ class VideoRenderer(ctx: Context) {
         }
         codec = c
         codecName = (if (h265) "H.265" else "H.264") + " (${c.name})"
+        if (pollOutput && !useWorker) {
+            val executor = outputExecutor ?: Executors.newSingleThreadScheduledExecutor { task ->
+                Thread(task, "AirPlayOutput")
+            }.also { outputExecutor = it }
+            outputPoll = executor.scheduleWithFixedDelay({
+                synchronized(lock) {
+                    // A cancelled task may already be waiting for the codec lock.
+                    if (codec === c) {
+                        try { drainOutput() }
+                        catch (e: Exception) {
+                            Log.w(TAG, "Output polling failed", e)
+                            stopCodec()
+                        }
+                    }
+                }
+            }, 2, 2, TimeUnit.MILLISECONDS)
+            Log.i(TAG, "Independent output polling enabled: 2ms, no input queue")
+        }
     }
 
     private fun stopCodec() {
+        outputPoll?.cancel(false)
+        outputPoll = null
+        timing.reset()
         _frameIntervalIdx = 0
         _frameIntervalCount = 0
         _lastOutputFrameNs = 0L
@@ -277,17 +432,27 @@ class VideoRenderer(ctx: Context) {
                     _ptsBaseUs = ptsUs
                     _wallBaseNs = System.nanoTime()
                 }
-                c.releaseOutputBuffer(idx, _wallBaseNs + (ptsUs - _ptsBaseUs) * 1000L)
+                val releaseNs = _wallBaseNs + (ptsUs - _ptsBaseUs) * 1000L
+                timing.output(ptsUs, releaseNs)
+                c.releaseOutputBuffer(idx, releaseNs)
             } else {
+                timing.output(info.presentationTimeUs, System.nanoTime())
                 c.releaseOutputBuffer(idx, true)
             }
         }
     }
 
-    fun release() = synchronized(lock) {
-        stopCodec()
-        pipeline.release()
-        _resetStats()
+    fun release() {
+        // Never join the worker while holding the codec lock it needs to finish.
+        if (workerDelegate.isInitialized()) workerDelegate.value.close()
+        synchronized(lock) {
+            stopCodec()
+            outputExecutor?.shutdown()
+            outputExecutor = null
+            pipeline.release()
+            _resetStats()
+            workerDelegate = createWorker()
+        }
     }
 
     private fun _recordOutputFrameTime() {
@@ -319,8 +484,8 @@ class VideoRenderer(ctx: Context) {
     companion object {
         private const val TAG = "VideoRenderer"
         private const val BENCH_TAG = "BENCHMARK"
-        private const val FEED_WAIT_US = 20_000L
-        private const val FEED_RETRIES = 10
-        private const val FIRST_FEED_RETRIES = 50
+        private const val FEED_WAIT_US = 1_000L
+        private const val FEED_RETRIES = 200
+        private const val FIRST_FEED_RETRIES = 1000
     }
 }

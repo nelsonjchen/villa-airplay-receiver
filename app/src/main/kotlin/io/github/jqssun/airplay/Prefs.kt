@@ -7,7 +7,7 @@ object Prefs {
     const val NAME = "settings"
     const val AUTO = "auto"; const val ON = "on"; const val OFF = "off"
 
-    const val SERVER_NAME = "server_name"; const val DEF_SERVER_NAME = "Android AirPlay"
+    const val SERVER_NAME = "server_name"; const val DEF_SERVER_NAME = "Villa AirPlay Receiver"
     const val FALLBACK_MAC_ADDRESS = "fallback_mac_address"
     const val SERVER_PORT = "server_port"; const val DEF_SERVER_PORT = 7000
     const val AUTO_START = "auto_start"; const val DEF_AUTO_START = true

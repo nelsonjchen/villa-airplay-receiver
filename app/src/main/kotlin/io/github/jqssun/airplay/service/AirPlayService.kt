@@ -948,6 +948,12 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     // helpers
 
     private fun getHwAddr(): ByteArray {
+        // Lab-only discovery experiment; this does not change the network interface MAC.
+        if (packageName.endsWith(".lab")) {
+            macFromString(prefs.getString("lab_discovery_mac", null))
+                ?.takeIf { isUsableMac(it) && (it[0].toInt() and 3) == 2 }
+                ?.let { return it }
+        }
         try {
             val interfaces = NetworkInterface.getNetworkInterfaces()
             for (iface in interfaces) {

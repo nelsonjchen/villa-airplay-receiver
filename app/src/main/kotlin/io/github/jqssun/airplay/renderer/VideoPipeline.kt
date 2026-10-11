@@ -32,6 +32,11 @@ class VideoPipeline {
     private var uTexMatrix = 0
     private val texMatrix = FloatArray(16)
     private var hasFrame = false
+    // GL-thread-only diagnostic windows. Swap completion is not panel presentation.
+    private var timingWindowNs = 0L
+    private var timingFrames = 0
+    private var maxTextureNs = 0L
+    private var maxDrawSwapNs = 0L
 
     private var surfaceTexture: SurfaceTexture? = null
     var inputSurface: Surface? = null; private set
@@ -131,6 +136,7 @@ class VideoPipeline {
     private fun _consumeAndDraw() {
         val st = surfaceTexture ?: return
         val egl = egl ?: return
+        val textureStart = System.nanoTime()
         if (window == EGL14.EGL_NO_SURFACE) {
             // no display: keep consuming so decoder doesn't stall
             egl.makeCurrent()
@@ -142,7 +148,22 @@ class VideoPipeline {
         st.updateTexImage()
         st.getTransformMatrix(texMatrix)
         hasFrame = true
+        val drawStart = System.nanoTime()
         _render()
+        val done = System.nanoTime()
+        if (timingWindowNs == 0L) timingWindowNs = textureStart
+        timingFrames++
+        maxTextureNs = maxOf(maxTextureNs, drawStart - textureStart)
+        maxDrawSwapNs = maxOf(maxDrawSwapNs, done - drawStart)
+        if (done - timingWindowNs >= 1_000_000_000L) {
+            Log.i("AIRPLAY_GL_TIMING", "windowMs=${(done-timingWindowNs)/1_000_000} " +
+                "frames=$timingFrames maxTextureUs=${maxTextureNs/1000} " +
+                "maxDrawSwapUs=${maxDrawSwapNs/1000}")
+            timingWindowNs = done
+            timingFrames = 0
+            maxTextureNs = 0
+            maxDrawSwapNs = 0
+        }
     }
 
     private fun _render() {

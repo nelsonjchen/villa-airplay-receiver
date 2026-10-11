@@ -1,4 +1,12 @@
-# AirPlay Receiver for Android
+# Villa AirPlay Receiver
+
+## Villa fork: Sony TV latency tuning
+
+Villa AirPlay Receiver is a local fork of [jqssun/android-airplay-server](https://github.com/jqssun/android-airplay-server), based on v0.0.31 and UxPlay. Its app label and advertised AirPlay/mDNS name are **Villa AirPlay Receiver**.
+
+For this Sony TV, we changed decoder timing to drain available decoded output before submitting more compressed video and shortened individual input waits from 20 ms to 1 ms while preserving the nominal total wait allowance. Together with the retained 1080p/up-to-60-fps configuration, this substantially reduced the observed lag; the user accepted the improvement and rough audio sync, and a 30-minute run showed no sustained delay buildup. The timing change's independent contribution has not been isolated from the resolution change. Exact physical screen-to-screen latency remains unmeasured, and occasional spikes remain.
+
+This configuration is tested on this Sony, not validated across other TVs. Playback still uses hardware H.264 over TCP. Experimental worker/direct-surface/Sony output options are disabled. Upstream links and distribution badges below refer to the original project, not this local fork.
 
 [![Stars](https://img.shields.io/github/stars/jqssun/android-airplay-server)](https://github.com/jqssun/android-airplay-server)
 [![GitHub](https://img.shields.io/github/downloads/jqssun/android-airplay-server/total?label=GitHub&logo=GitHub)](https://github.com/jqssun/android-airplay-server/releases)

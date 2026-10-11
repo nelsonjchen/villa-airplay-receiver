@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">AirPlay Server</string>
+    <string name="app_name">Villa AirPlay Receiver</string>
 
     <!-- Notification -->
     <string name="notification_channel">AirPlay Service</string>

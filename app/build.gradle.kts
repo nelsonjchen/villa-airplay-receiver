@@ -12,12 +12,14 @@ val localProps = Properties().apply {
     rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use(::load)
 }
 
+val useBaselineNative = providers.gradleProperty("baselineNative").isPresent
+
 val allAbis = listOf("arm64-v8a", "armeabi-v7a", "x86_64")
 
 android {
     namespace = "io.github.jqssun.airplay"
     compileSdk = 36
-    ndkVersion = "27.0.12077973"
+    if (!useBaselineNative) ndkVersion = "27.0.12077973"
 
     if (localProps.containsKey("storeFile")) {
         signingConfigs {
@@ -45,15 +47,19 @@ android {
         }
     }
 
-    externalNativeBuild {
-        cmake {
-            path = file("src/main/cpp/CMakeLists.txt")
+    if (!useBaselineNative) {
+        externalNativeBuild {
+            cmake { path = file("src/main/cpp/CMakeLists.txt") }
         }
+    } else {
+        sourceSets.getByName("main").jniLibs.srcDir("baseline-native")
     }
 
     buildTypes {
         debug {
-            ndk { abiFilters += allAbis }
+            applicationIdSuffix = ".lab"
+            versionNameSuffix = "-timing"
+            ndk { abiFilters += "armeabi-v7a" }
         }
         release {
             isMinifyEnabled = true
@@ -122,6 +128,7 @@ tasks.withType<Zip>().configureEach {
 }
 
 dependencies {
+    testImplementation("junit:junit:4.13.2")
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime)

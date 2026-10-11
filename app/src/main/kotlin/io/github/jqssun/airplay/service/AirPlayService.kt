@@ -206,9 +206,51 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         return LocalBinder()
     }
 
+    private val screenEpoch = java.util.concurrent.atomic.AtomicInteger()
+    @Volatile private var endingScreenSession = false
+    private var listeningPort = 0
+    private val screenReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action == Intent.ACTION_SCREEN_OFF) {
+                screenEpoch.incrementAndGet()
+                endSessionForScreenOff()
+            }
+        }
+    }
+
+    private fun endSessionForScreenOff() {
+        if (nativeHandle == 0L || _connectionCount.value == 0) return
+        log("Screen off: ending playback; keeping receiver discoverable")
+        endingScreenSession = true
+        try {
+            // The current bridge has no session-only disconnect operation.
+            // Stop joins client threads; restart the listener on the advertised port.
+            NativeBridge.nativeStop(nativeHandle)
+            videoRenderer.stopSession()
+            audioRenderer.stop()
+            _endVideoPlayback("AirPlay Video stopped (screen off)")
+            _mirroringActive.value = false
+            _audioOnly.value = false
+            _connectionCount.value = 0
+            mediaSession?.isActive = false
+            dacpController?.reset()
+            _mainHandler.removeCallbacks(_volSyncTimeout)
+            _volSyncTarget = -1f
+            mirrorWakePending.set(true)
+            val port = NativeBridge.nativeStart(nativeHandle, listeningPort)
+            if (port != listeningPort) {
+                log("Listener restart failed after screen off")
+                stopServer()
+            } else log("Screen-off cleanup complete; receiver listening")
+        } finally {
+            endingScreenSession = false
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        ContextCompat.registerReceiver(this, screenReceiver, IntentFilter(Intent.ACTION_SCREEN_OFF), ContextCompat.RECEIVER_NOT_EXPORTED)
         dacpController = DacpController(this)
         dacpPlayer = DacpPlayer(
             mainLooper,
@@ -420,6 +462,8 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
             return
         }
 
+        listeningPort = port
+
         // register mdns services
         val raopTxt = NativeBridge.nativeGetRaopTxtRecords(nativeHandle) ?: emptyMap()
         val airplayTxt = NativeBridge.nativeGetAirplayTxtRecords(nativeHandle) ?: emptyMap()
@@ -580,6 +624,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     }
 
     override fun onDestroy() {
+        unregisterReceiver(screenReceiver)
         stopServer()
         dacpPlayer.release()
         mediaReceiver?.let {
@@ -1086,8 +1131,10 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     // Discovery and pre-auth TCP connections must not turn the display on.
     @Suppress("DEPRECATION")
     private fun wakeForPlayback() {
-        if (!shouldLaunchOnConnect()) return
+        if (!shouldLaunchOnConnect() || endingScreenSession) return
+        val epoch = screenEpoch.get()
         _mainHandler.post {
+            if (epoch != screenEpoch.get() || endingScreenSession) return@post
             val pm = getSystemService(POWER_SERVICE) as PowerManager
             try {
                 val pulse = pm.newWakeLock(

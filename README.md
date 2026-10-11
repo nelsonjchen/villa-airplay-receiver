@@ -91,6 +91,25 @@ not been separately tested. A cold foreground-service start immediately after
 install hit Android's startup timeout; starting the app process first recovered
 it. Boot/deep-standby startup reliability remains a separate limitation.
 
+## Screen-off lifecycle
+
+Turning the screen off ends the connected playback session, stops video/audio
+rendering, cancels pending wake requests, and leaves the foreground receiver and
+mDNS registration available. This follows Sony's separation of session cleanup
+from receiver shutdown. Our current native bridge has no session-only disconnect
+API, so Villa briefly stops and restarts the native listener on the same port;
+it does not remove the Android mDNS registrations. Failure to rebind stops the
+server rather than leaving a stale advertisement. This is an implementation
+approximation, not a port of Sony's native session-finalization code.
+
+Validated on the target TV with one live mirroring cycle: screen-off disconnected
+the sender and left the foreground service running with the display off; selecting
+Villa again reconnected and woke the display. The debug build and unit tests passed.
+Deep standby and audio-only screen-off behavior have not been separately tested.
+
+Automatic picture-in-picture on leaving the app is still inherited from upstream.
+Equivalent auto-PiP behavior has not been established in Sony's reference player.
+
 ## Results and limits
 
 The retained 1080p configuration completed a 30-minute run with no logged codec

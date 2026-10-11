@@ -599,7 +599,10 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
 
     // RaopCallbackHandler (called from native threads)
 
+    private val mirrorWakePending = java.util.concurrent.atomic.AtomicBoolean(true)
+
     override fun onVideoData(data: ByteArray, ntpTimeNs: Long, isH265: Boolean) {
+        if (data.isNotEmpty() && mirrorWakePending.compareAndSet(true, false)) wakeForPlayback()
         videoRenderer.feedFrame(data, ntpTimeNs, isH265)
     }
 
@@ -608,6 +611,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     }
 
     override fun onVideoPlay(location: String, startPositionSeconds: Float) {
+        wakeForPlayback()
         _videoLocation.value = location
         _videoPlaySeq.value++
         _videoPollSuppressed = false
@@ -638,6 +642,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         audioRenderer.setFormat(ct, spf)
         if (!usingScreen) _setPlaying(true)
         if (!usingScreen && !_audioOnly.value) {
+            wakeForPlayback()
             // pure music streaming (not screen mirroring audio)
             _setAudioOnly(true)
         }
@@ -808,6 +813,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     }
 
     override fun onMirrorRunning(running: Boolean) {
+        mirrorWakePending.set(true)
         if (running) videoRenderer.startSession() else {
             videoRenderer.stopSession()
             _mirroringActive.value = false
@@ -1074,6 +1080,33 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
             }
         }
         return builder.build()
+    }
+
+    // Match the Sony Android 9-era wake pulse, only once actual playback starts.
+    // Discovery and pre-auth TCP connections must not turn the display on.
+    @Suppress("DEPRECATION")
+    private fun wakeForPlayback() {
+        if (!shouldLaunchOnConnect()) return
+        _mainHandler.post {
+            val pm = getSystemService(POWER_SERVICE) as PowerManager
+            try {
+                val pulse = pm.newWakeLock(
+                    PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
+                    "villa:playback-wake"
+                )
+                pulse.setReferenceCounted(false)
+                try {
+                    // Also exits a screensaver when the display is already interactive.
+                    pulse.acquire(10_000L)
+                    log("Playback screen wake requested; interactive=${pm.isInteractive}")
+                } finally {
+                    if (pulse.isHeld) pulse.release()
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Playback screen wake failed", e)
+            }
+            launchMainActivity()
+        }
     }
 
     private fun launchMainActivity() {

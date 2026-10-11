@@ -72,6 +72,25 @@ The 1080p limit is a retained TV preference, not a universal hard-coded limit.
 Low-latency decoder options already existed upstream; we do not claim those
 as a new Villa feature or assume the hardware honors every accepted option.
 
+## Wake on playback
+
+With launch-on-connect enabled, Villa requests a brief screen wake when the
+first mirroring video data arrives, a video playback request starts, or an
+audio-only session begins. It follows the wake-lock pattern observed in Sony's
+reference receiver: SCREEN_BRIGHT_WAKE_LOCK | ACQUIRE_CAUSES_WAKEUP, acquired
+with a 10-second safety timeout and immediately released. Discovery and initial
+TCP connections do not trigger this wake request. A continuous mirror stream
+only requests wake once, allowing the user to put the screen back to sleep.
+This targets the Android 9 Sony; newer Android versions may impose additional
+restrictions.
+
+Validated on the target Sony: receiver running with display OFF, then a Mac
+mirroring connection triggered the wake request and display ON; the user also
+confirmed the screen turned on. Audio-only wake and screensaver dismissal have
+not been separately tested. A cold foreground-service start immediately after
+install hit Android's startup timeout; starting the app process first recovered
+it. Boot/deep-standby startup reliability remains a separate limitation.
+
 ## Results and limits
 
 The retained 1080p configuration completed a 30-minute run with no logged codec
@@ -101,10 +120,9 @@ implemented feature. DRM-protected content is unsupported.
 
 The application ID is `com.mindflakes.villaairplay` (from mindflakes.com).
 Internal Kotlin/JNI namespaces retain the upstream names. Debug-only diagnostics
-use the build type rather than a package-name suffix. The TV currently still has
-the earlier `io.github.jqssun.airplay.lab` installation: the new ID installs as a
-separate app and requires settings migration and re-pinning the launcher favorite.
-No TV migration was performed as part of this source change.
+use the build type rather than a package-name suffix. The target TV has been migrated from `io.github.jqssun.airplay.lab`, preserving
+settings and the AirPlay identity. The old installation is disabled for rollback.
+Changing IDs creates a separate app and requires re-pinning its launcher favorite.
 
 ## Build
 

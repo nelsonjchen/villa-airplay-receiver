@@ -1,78 +1,121 @@
 # Villa AirPlay Receiver
 
-## Villa fork: Sony TV latency tuning
+An Android TV AirPlay receiver fork tuned for the Sony TV at Villa. Based on
+[jqssun/android-airplay-server](https://github.com/jqssun/android-airplay-server)
+v0.0.31 (`c8defdd`), using [UxPlay](https://github.com/FDH2/UxPlay).
+The app label and advertised AirPlay/mDNS name are **Villa AirPlay Receiver**.
 
-Villa AirPlay Receiver is a local fork of [jqssun/android-airplay-server](https://github.com/jqssun/android-airplay-server), based on v0.0.31 and UxPlay. Its app label and advertised AirPlay/mDNS name are **Villa AirPlay Receiver**.
+## Target TV
 
-For this Sony TV, we changed decoder timing to drain available decoded output before submitting more compressed video and shortened individual input waits from 20 ms to 1 ms while preserving the nominal total wait allowance. Together with the retained 1080p/up-to-60-fps configuration, this substantially reduced the observed lag; the user accepted the improvement and rough audio sync, and a 30-minute run showed no sustained delay buildup. The timing change's independent contribution has not been isolated from the resolution change. Exact physical screen-to-screen latency remains unmeasured, and occasional spikes remain.
+Tested on a Sony reporting **BRAVIA 4K GB**, device **BRAVIA_ATV2**, running
+**Android 9**, with a **32-bit ARM (`armeabi-v7a`)** app runtime. Video uses the
+MediaTek hardware decoder **OMX.MTK.VIDEO.DECODER.AVC**. These are the device's
+reported identifiers; the exact retail model number has not been established.
+This fork's tuning has not been validated on other TVs.
 
-This configuration is tested on this Sony, not validated across other TVs. Playback still uses hardware H.264 over TCP. Experimental worker/direct-surface/Sony output options are disabled. Upstream links and distribution badges below refer to the original project, not this local fork.
+The working receiver configuration advertises **1920×1080, up to 60 FPS**.
+The latest Mac mirroring session actually encoded **1662×1080 H.264**, matching
+its mirrored desktop aspect ratio. Screen video uses **TCP**.
 
-[![Stars](https://img.shields.io/github/stars/jqssun/android-airplay-server)](https://github.com/jqssun/android-airplay-server)
-[![GitHub](https://img.shields.io/github/downloads/jqssun/android-airplay-server/total?label=GitHub&logo=GitHub)](https://github.com/jqssun/android-airplay-server/releases)
-[![license](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://github.com/jqssun/android-airplay-server/blob/main/LICENSE)
-[![build](https://img.shields.io/github/actions/workflow/status/jqssun/android-airplay-server/apk.yml?label=build)](https://github.com/jqssun/android-airplay-server/actions/workflows/apk.yml)
-[![release](https://img.shields.io/github/v/release/jqssun/android-airplay-server)](https://github.com/jqssun/android-airplay-server/releases)
+## Why this fork exists
 
-A fully featured free and open-source implementation of AirPlay for Android that turns your device into an AirPlay-compatible display and speaker, based on [UxPlay](https://github.com/FDH2/UxPlay). It is the first open-source AirPlay 2 receiver for Android and Android TV, and works with iOS/iPadOS, macOS devices as well as other sender implementations.
+The original high-resolution setup felt roughly 1–2 seconds behind the Mac.
+Receiver instrumentation showed roughly 0.8–1.0 seconds between arrival at the
+video callback and collecting decoded output, with growing arrival delay.
+We retained a lower-resolution configuration and changed decoder scheduling to
+reduce buffering. The user reported substantially better responsiveness and
+acceptable approximate audio sync.
 
-[<img height="48" alt="Get it on Google Play" src="https://jqssun.github.io/images/badges/google-play-store.svg">](https://play.google.com/store/apps/details?id=io.github.jqssun.airplay)
-[<img height="48" alt="Get it on F-Droid" src="https://jqssun.github.io/images/badges/fdroid.svg">](https://f-droid.org/packages/io.github.jqssun.airplay)
-[<img height="48" alt="Get it on GitHub" src="https://jqssun.github.io/images/badges/github.svg">](https://github.com/jqssun/android-airplay-server/releases/latest)
+## Changes from upstream
 
-<video loop src='https://github.com/user-attachments/assets/79ed7c0c-0102-43cc-8816-4f00ce6a4199' alt="demo" width="200" style="display: block; margin: auto;"></video>
+- **Drain finished output before feeding input.** Return decoded buffers before
+  asking MediaCodec for another input slot, so finished pictures are not left
+  waiting while more compressed data is submitted.
+- **Shorter individual input waits.** Reduced the dequeue wait from 20 ms to
+  1 ms, increasing retry counts to preserve nominal total allowances of 200 ms
+  during playback and 1 second for the first frame. Output is checked between
+  attempts.
+- **Independent output polling, opt-in.** `lab_output_poll=true` checks decoded
+  output every 2 ms without adding an input queue. Codec access is serialized;
+  cancellation and codec identity checks protect resets and shutdown. Enabled
+  on the target TV, but **false by default in source**.
+- **Timing instrumentation.** Logs callback-to-output residence, time before
+  codec submission, input waits, pending frames, presentation scheduling, and
+  GL texture/draw timing. These are local pipeline measurements, not physical
+  screen-to-screen latency.
+- **Villa branding and isolated debug package.** Debug builds use
+  `io.github.jqssun.airplay.lab`, retain the Villa discovery name, and target
+  `armeabi-v7a`. A lab-only discovery identity override supports experiments.
+- **Opt-in comparison paths.** Bounded input worker, direct display surface,
+  and Sony vendor output configuration were explored. They did not establish
+  an improvement and remain disabled on the target TV. Worker lifecycle tests
+  are included; polling is disabled when worker mode is selected.
 
-## Compatibility
+The 1080p limit is a retained TV preference, not a universal hard-coded limit.
+Low-latency decoder options already existed upstream; we do not claim those
+as a new Villa feature or assume the hardware honors every accepted option.
 
-- Android 7.0+, including Android TV
-- AirPlay devices on the same subnet, including iOS/iPadOS, macOS devices, or other sender implementations
+## Results and limits
 
-## Features
+The retained 1080p configuration completed a 30-minute run with no logged codec
+errors, input-full drops, crashes, or sustained delay buildup. Across steady
+windows, median p50 residence was about 73 ms and median p95 about 157 ms.
+Occasional spikes remained. Resolution and the earlier scheduling changes were
+not independently isolated.
 
-- Screen mirroring with H.264 and H.265 (HEVC) video decoding
-- Audio streaming with AAC-ELD, AAC-LC and ALAC audio decoding
-- Video playback with support for HLS, downloads, and remote controls
-- Music playback with track information, cover art, and remote controls
-- Support for Android TV with directional pad navigation and seeking controls
-- Support for Picture-in-Picture, automatic resolution and mode switching
-- Optional PIN authentication
-- Video resolution, overscan, and frame rate control
-- Audio latency control and support for software decoder fallback
-- Debug overlay with real-time statistics (FPS, bitrate, codec, resolution, frame count, audio volume, etc.)
-- Android native media session integration with notification controls
+A later short comparison of independent polling showed:
 
-> [!WARNING]
-> DRM content (e.g. from the Apple TV application) is not supported.
+| Receiver-local statistic | Before polling | Polling enabled |
+| --- | ---: | ---: |
+| Median of window p50 values | 67 ms | 57 ms |
+| Median of window p95 values | 147 ms | 129 ms |
 
-## Implementation
+Content was not controlled and reconnecting changed the session, so this is
+suggestive evidence, not a proven causal improvement. These are medians of
+window percentiles, not pooled frame percentiles. CPU/power overhead and
+physical display latency have not been measured. Long-tail delays remain.
 
-This application uses the C-based [UxPlay](https://github.com/FDH2/UxPlay) library to implement the AirPlay/RAOP protocol, with a JNI bridge to the Android application layer. Audio can be decoded via MediaCodec or a software ALAC decoder, while mirroring video is decoded via MediaCodec and rendered to a SurfaceView. HLS sessions are served through a local playlist proxy.
+HEVC decoding exists upstream, but **no successful HEVC mirroring session has
+been demonstrated on this setup**. Advertising HEVC or 4K did not make the Mac
+select it. UDP video interoperability remains an investigation, not an
+implemented feature. DRM-protected content is unsupported.
 
-```mermaid
-flowchart LR
-    AppleDevice["Apple Device (Sender)"]
-    UxPlay["UxPlay (C/JNI)<br/>RAOP + mDNS<br/>FairPlay + HLS"]
-    AndroidApp["Android (Receiver)<br/>MediaCodec + AudioTrack<br/>ExoPlayer (HLS)"]
+## Build
 
-    AppleDevice -- "RAOP / HLS" --> UxPlay
-    UxPlay --> AndroidApp
-```
+For a normal source build, install the Android SDK and NDK requested by the
+Gradle project, initialize native dependencies, then build:
 
-CMake is used for native C/C++ components under [`app/src/main/cpp`](app/src/main/cpp). Submodules must be initialized before building. 
-
-```bash
+```sh
 git submodule update --init --recursive
-./gradlew assembleDebug
+./gradlew testDebugUnitTest assembleDebug
 ```
 
-Check out the [CI](https://github.com/jqssun/android-airplay-server/blob/main/.github/workflows/apk.yml) for more details on reproducible builds.
+Local iteration used JDK 21 and `-PbaselineNative`, which bypasses native
+compilation and uses pre-existing libraries in `app/baseline-native/`:
 
-## Credits
+```sh
+./gradlew -PbaselineNative testDebugUnitTest assembleDebug
+```
 
-- [UxPlay](https://github.com/FDH2/UxPlay) for the AirPlay/RAOP server implementation
-- [FFmpeg](https://ffmpeg.org) for the lossless audio decoder
-- [Next Player](https://github.com/anilbeesetti/nextplayer) for the video player
+Those libraries are ignored and **not supplied by this repository**. A fresh
+clone should use the normal source build. The baseline-native build and existing
+unit tests passed locally; a fresh full native build has not been validated for
+this fork. Debug APK output: `app/build/outputs/apk/debug/app-debug.apk`.
 
----
+## Investigation and recovery
 
-Disclaimer: This project is not affiliated with Apple Inc.
+Local research notes, raw measurements, prior APKs, and settings backups live
+separately in `~/code/airplay-receiver-lab`. Firmware, Apple binaries/disassembly,
+raw device logs, and local build artifacts are not included here. Before changing
+the TV, preserve its installed APK and preferences so a failed experiment can
+be rolled back. The polling experiment can be disabled by restoring the prior
+preferences and restarting the receiver.
+
+## License and credits
+
+GPLv3; see [LICENSE](LICENSE). Original Android receiver by
+[jqssun](https://github.com/jqssun/android-airplay-server), protocol implementation
+by [UxPlay](https://github.com/FDH2/UxPlay), with
+[FFmpeg](https://ffmpeg.org) audio decoding and
+[Next Player](https://github.com/anilbeesetti/nextplayer) video-player work.
+Not affiliated with Apple or Sony.

@@ -1,23 +1,19 @@
 package io.github.jqssun.airplay
 
 import android.Manifest
-import android.app.PictureInPictureParams
 import android.content.ComponentName
 import android.content.Intent
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
-import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
-import android.util.Rational
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
-import androidx.compose.runtime.mutableStateOf
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
@@ -36,7 +32,6 @@ class MainActivity : ComponentActivity() {
 
     private val viewModel: MainViewModel by viewModels()
     private var service: AirPlayService? = null
-    val isInPip = mutableStateOf(false)
     private val logCallback: (String) -> Unit = { viewModel.addLog(it) }
     private val pinCallback: (String?) -> Unit = { viewModel.showPin(it) }
 
@@ -92,60 +87,15 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // auto-enter pre-declared in pip params
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            lifecycleScope.launch {
-                repeatOnLifecycle(Lifecycle.State.STARTED) {
-                    combine(
-                        viewModel.serverState, viewModel.connectionCount,
-                        viewModel.videoPlaybackActive, viewModel.videoPlaybackAspect,
-                        viewModel.videoAspect
-                    ) { _, _, _, _, _ -> }.collect { setPictureInPictureParams(_pipParams()) }
-                }
-            }
-        }
-
         setContent {
             AirPlayTheme {
                 MainScreen(
                     viewModel = viewModel,
-                    isInPip = isInPip.value,
                     onSurfaceAvailable = { viewModel.onSurfaceAvailable(it) },
-                    onSurfaceDestroyed = { viewModel.onSurfaceDestroyed(it) },
-                    onPip = { enterPip() }
+                    onSurfaceDestroyed = { viewModel.onSurfaceDestroyed(it) }
                 )
             }
         }
-    }
-
-    fun enterPip() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-        enterPictureInPictureMode(_pipParams())
-    }
-
-    private fun _pipParams(): PictureInPictureParams {
-        val aspect = if (viewModel.videoPlaybackActive.value) viewModel.videoPlaybackAspect.value
-            else viewModel.videoAspect.value
-        val rational = Rational((aspect * 1000).toInt().coerceIn(1, 2390), 1000)
-        val builder = PictureInPictureParams.Builder().setAspectRatio(rational)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            builder.setAutoEnterEnabled(_shouldAutoPip())
-        }
-        return builder.build()
-    }
-
-    private fun _shouldAutoPip(): Boolean =
-        viewModel.serverState.value == AirPlayService.ServerState.RUNNING &&
-            viewModel.connectionCount.value > 0
-
-    override fun onUserLeaveHint() {
-        super.onUserLeaveHint()
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S && _shouldAutoPip()) enterPip()
-    }
-
-    override fun onPictureInPictureModeChanged(inPip: Boolean, newConfig: Configuration) {
-        super.onPictureInPictureModeChanged(inPip, newConfig)
-        isInPip.value = inPip
     }
 
     override fun onStop() {

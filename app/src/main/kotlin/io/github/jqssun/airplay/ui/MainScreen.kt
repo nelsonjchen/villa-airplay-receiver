@@ -2,7 +2,6 @@ package io.github.jqssun.airplay.ui
 
 import android.app.Activity
 import android.content.pm.ActivityInfo
-import android.content.pm.PackageManager
 import android.content.res.Configuration
 import androidx.activity.compose.BackHandler
 import androidx.annotation.OptIn as AndroidxOptIn
@@ -62,7 +61,6 @@ import io.github.jqssun.airplay.ui.gestures.VolumeState
 import io.github.jqssun.airplay.ui.gestures.ZoomState
 import io.github.jqssun.airplay.viewmodel.DebugInfo
 import io.github.jqssun.airplay.viewmodel.MainViewModel
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSourceBitmapLoader
@@ -85,10 +83,8 @@ private enum class Tab(val labelRes: Int, val icon: ImageVector) {
 @Composable
 fun MainScreen(
     viewModel: MainViewModel,
-    isInPip: Boolean = false,
     onSurfaceAvailable: (android.view.Surface) -> Unit,
-    onSurfaceDestroyed: (android.view.Surface) -> Unit,
-    onPip: () -> Unit = {}
+    onSurfaceDestroyed: (android.view.Surface) -> Unit
 ) {
     var tab by remember { mutableStateOf(Tab.OVERVIEW) }
     var fullscreen by remember { mutableStateOf(false) }
@@ -152,15 +148,6 @@ fun MainScreen(
                 aspectRatio = videoPlaybackAspect
             )
         }
-        if (isInPip) {
-            Box(
-                modifier = Modifier.fillMaxSize().background(Color.Black),
-                contentAlignment = Alignment.Center
-            ) {
-                playback()
-            }
-            return
-        }
         val overlayTick by viewModel.videoOverlayTick.collectAsState()
         val playing by viewModel.videoPlaying.collectAsState()
         val positionMs by viewModel.videoPositionMs.collectAsState()
@@ -221,9 +208,6 @@ fun MainScreen(
         val videoTitle by viewModel.videoTitle.collectAsState()
         val videoLocation by viewModel.videoLocation.collectAsState()
         val speed by viewModel.videoSpeed.collectAsState()
-        val isPipSupported = remember {
-            context.packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)
-        }
         var showSpeedSelector by remember { mutableStateOf(false) }
         BackHandler { viewModel.stopVideoPlayback() }
 
@@ -427,7 +411,6 @@ fun MainScreen(
                         positionMs = scrubPositionMs ?: positionMs,
                         durationMs = durationMs,
                         contentScale = zoomState.contentScale,
-                        isPipSupported = isPipSupported,
                         onRotateClick = {
                             activity?.let {
                                 it.requestedOrientation =
@@ -446,7 +429,6 @@ fun MainScreen(
                             viewModel.showVideoOverlay()
                             zoomState.switchToNextContentScale()
                         },
-                        onPipClick = onPip,
                         onSeek = { seekGestureState.onSeek(it) },
                         onSeekEnd = { seekGestureState.onSeekEnd() },
                         seekBarModifier = Modifier
@@ -477,25 +459,6 @@ fun MainScreen(
         return
     }
 
-    // pip mode: show only the video surface
-    if (isInPip) {
-        Box(
-            modifier = Modifier.fillMaxSize().background(Color.Black),
-            contentAlignment = Alignment.Center
-        ) {
-            video()
-        }
-        return
-    }
-
-    // restore system bars when exiting pip back to non-fullscreen
-    LaunchedEffect(isInPip) {
-        if (!isInPip && !fullscreen) {
-            val window = activity?.window ?: return@LaunchedEffect
-            WindowInsetsControllerCompat(window, window.decorView).show(WindowInsetsCompat.Type.systemBars())
-        }
-    }
-
     // exit fullscreen while a pin is being shown so the dialog isn't covered
     LaunchedEffect(pin) {
         if (pin != null) fullscreen = false
@@ -506,8 +469,7 @@ fun MainScreen(
         FullscreenVideo(
             viewModel = viewModel,
             video = video,
-            onExitFullscreen = { fullscreen = false },
-            onPip = onPip
+            onExitFullscreen = { fullscreen = false }
         )
     } else {
         Scaffold(
@@ -535,7 +497,7 @@ fun MainScreen(
             Box(modifier = Modifier.padding(padding)) {
                 TabContent(
                     tab, viewModel, video,
-                    onFullscreen = { fullscreen = true }, onPip = onPip, showAudioMode = audioOnly
+                    onFullscreen = { fullscreen = true }, showAudioMode = audioOnly
                 )
             }
         }
@@ -568,13 +530,12 @@ private fun TabContent(
     viewModel: MainViewModel,
     video: @Composable () -> Unit,
     onFullscreen: () -> Unit,
-    onPip: () -> Unit,
     showAudioMode: Boolean
 ) {
     when (tab) {
         Tab.OVERVIEW -> OverviewContent(
             viewModel, video,
-            onFullscreen = onFullscreen, onPip = onPip, showAudioMode = showAudioMode
+            onFullscreen = onFullscreen, showAudioMode = showAudioMode
         )
         Tab.LOGS -> LogsScreen(viewModel)
         Tab.SETTINGS -> SettingsScreen(viewModel)
@@ -586,7 +547,6 @@ private fun OverviewContent(
     viewModel: MainViewModel,
     video: @Composable () -> Unit,
     onFullscreen: () -> Unit,
-    onPip: () -> Unit,
     showAudioMode: Boolean = false
 ) {
     val state by viewModel.serverState.collectAsState()
@@ -651,12 +611,6 @@ private fun OverviewContent(
                 }
                 if (state == ServerState.RUNNING && mirroringActive) {
                     Row(modifier = Modifier.align(Alignment.TopEnd).padding(4.dp)) {
-                        IconButton(onClick = onPip, modifier = Modifier.dpadFocus()) {
-                            Icon(
-                                painterResource(R.drawable.ic_pip), contentDescription = stringResource(R.string.cd_pip),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                            )
-                        }
                         IconButton(onClick = onFullscreen, modifier = Modifier.dpadFocus()) {
                             Icon(
                                 Icons.Default.Fullscreen, contentDescription = stringResource(R.string.cd_fullscreen),
@@ -754,8 +708,7 @@ private fun OverviewContent(
 private fun FullscreenVideo(
     viewModel: MainViewModel,
     video: @Composable () -> Unit,
-    onExitFullscreen: () -> Unit,
-    onPip: () -> Unit
+    onExitFullscreen: () -> Unit
 ) {
     val videoResolution by viewModel.videoResolution.collectAsState()
     val debugEnabled by viewModel.debugEnabled.collectAsState()
@@ -782,12 +735,6 @@ private fun FullscreenVideo(
             modifier = Modifier.align(Alignment.TopEnd)
         ) {
             Row(modifier = Modifier.padding(8.dp)) {
-                IconButton(onClick = onPip, modifier = Modifier.dpadFocus()) {
-                    Icon(
-                        painterResource(R.drawable.ic_pip), contentDescription = stringResource(R.string.cd_pip),
-                        tint = Color.White.copy(alpha = 0.7f)
-                    )
-                }
                 IconButton(onClick = onExitFullscreen, modifier = Modifier.dpadFocus()) {
                     Icon(
                         Icons.Default.FullscreenExit, contentDescription = stringResource(R.string.cd_exit_fullscreen),

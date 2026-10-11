@@ -45,7 +45,6 @@ import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.LockOpen
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PhotoSizeSelectActual
-import androidx.compose.material.icons.rounded.PictureInPictureAlt
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.ScreenRotation
 import androidx.compose.material.icons.rounded.Speed
@@ -251,11 +250,9 @@ fun VideoControlsBottom(
     positionMs: Long,
     durationMs: Long,
     contentScale: VideoContentScale,
-    isPipSupported: Boolean,
     onRotateClick: () -> Unit,
     onLockClick: () -> Unit,
     onContentScaleClick: () -> Unit,
-    onPipClick: () -> Unit,
     onSeek: (Long) -> Unit,
     onSeekEnd: () -> Unit,
     modifier: Modifier = Modifier,
@@ -328,11 +325,7 @@ fun VideoControlsBottom(
             PlayerButton(onClick = onContentScaleClick) {
                 Icon(contentScale.icon(), contentDescription = stringResource(contentScale.nameRes()))
             }
-            if (isPipSupported) {
-                PlayerButton(onClick = onPipClick) {
-                    Icon(Icons.Rounded.PictureInPictureAlt, contentDescription = stringResource(R.string.cd_pip))
-                }
-            }
+
         }
     }
 }

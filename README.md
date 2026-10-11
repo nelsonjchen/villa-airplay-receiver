@@ -107,8 +107,9 @@ the sender and left the foreground service running with the display off; selecti
 Villa again reconnected and woke the display. The debug build and unit tests passed.
 Deep standby and audio-only screen-off behavior have not been separately tested.
 
-Automatic picture-in-picture on leaving the app is still inherited from upstream.
-Equivalent auto-PiP behavior has not been established in Sony's reference player.
+Picture-in-picture is disabled: leaving Villa does not open a floating player,
+and playback controls have no PiP button. This is our requested OEM-style policy;
+equivalent automatic PiP behavior was not established in Sony's reference player.
 
 ## Results and limits
 

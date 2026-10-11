@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
+import io.github.jqssun.airplay.BuildConfig
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -949,7 +950,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
 
     private fun getHwAddr(): ByteArray {
         // Lab-only discovery experiment; this does not change the network interface MAC.
-        if (packageName.endsWith(".lab")) {
+        if (BuildConfig.DEBUG) {
             macFromString(prefs.getString("lab_discovery_mac", null))
                 ?.takeIf { isUsableMac(it) && (it[0].toInt() and 3) == 2 }
                 ?.let { return it }
@@ -1116,10 +1117,10 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         private const val VOL_SYNC_TIMEOUT_MS = 800L
         private const val CHANNEL_ID = "airplay_service"
         private const val NOTIFICATION_ID = 1
-        const val ACTION_PLAY_PAUSE = "io.github.jqssun.airplay.PLAY_PAUSE"
-        const val ACTION_NEXT = "io.github.jqssun.airplay.NEXT"
-        const val ACTION_PREV = "io.github.jqssun.airplay.PREV"
-        const val ACTION_START_SERVER = "io.github.jqssun.airplay.START_SERVER"
+        const val ACTION_PLAY_PAUSE = BuildConfig.APPLICATION_ID + ".PLAY_PAUSE"
+        const val ACTION_NEXT = BuildConfig.APPLICATION_ID + ".NEXT"
+        const val ACTION_PREV = BuildConfig.APPLICATION_ID + ".PREV"
+        const val ACTION_START_SERVER = BuildConfig.APPLICATION_ID + ".START_SERVER"
         // shared with dpad/double-tap seeks
         const val VIDEO_SEEK_STEP_MS = 10_000L
         const val VIDEO_POLL_PENDING_TIMEOUT_MS = 3_000L

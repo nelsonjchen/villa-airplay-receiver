@@ -33,7 +33,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "io.github.jqssun.airplay"
+        applicationId = "com.mindflakes.villaairplay"
         minSdk = 24
         targetSdk = 36
         versionCode = 31
@@ -57,7 +57,6 @@ android {
 
     buildTypes {
         debug {
-            applicationIdSuffix = ".lab"
             versionNameSuffix = "-timing"
             ndk { abiFilters += "armeabi-v7a" }
         }
@@ -96,6 +95,7 @@ android {
     }
 
     buildFeatures {
+        buildConfig = true
         compose = true
         prefab = true
     }

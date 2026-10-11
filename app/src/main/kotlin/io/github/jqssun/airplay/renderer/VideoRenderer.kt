@@ -1,5 +1,6 @@
 package io.github.jqssun.airplay.renderer
 
+import io.github.jqssun.airplay.BuildConfig
 import android.content.Context
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
@@ -21,7 +22,7 @@ class VideoRenderer(ctx: Context) {
     }
     private var outputExecutor: ScheduledExecutorService? = null
     private var outputPoll: ScheduledFuture<*>? = null
-    private val captureHeaders by lazy { ctx.packageName.endsWith(".lab") }
+    private val captureHeaders by lazy { BuildConfig.DEBUG }
     private var headersLogged = false
 
     // Opt-in experiment only; keep this separate from the resolution comparison.

@@ -47,8 +47,8 @@ acceptable approximate audio sync.
   codec submission, input waits, pending frames, presentation scheduling, and
   GL texture/draw timing. These are local pipeline measurements, not physical
   screen-to-screen latency.
-- **Villa branding and isolated debug package.** Debug builds use
-  `io.github.jqssun.airplay.lab`, retain the Villa discovery name, and target
+- **Villa branding and application identity.** Builds use
+  `com.mindflakes.villaairplay`; debug builds retain diagnostics and target
   `armeabi-v7a`. A lab-only discovery identity override supports experiments.
 - **Opt-in comparison paths.** Bounded input worker, direct display surface,
   and Sony vendor output configuration were explored. They did not establish
@@ -83,6 +83,15 @@ HEVC decoding exists upstream, but **no successful HEVC mirroring session has
 been demonstrated on this setup**. Advertising HEVC or 4K did not make the Mac
 select it. UDP video interoperability remains an investigation, not an
 implemented feature. DRM-protected content is unsupported.
+
+## Package migration
+
+The application ID is `com.mindflakes.villaairplay` (from mindflakes.com).
+Internal Kotlin/JNI namespaces retain the upstream names. Debug-only diagnostics
+use the build type rather than a package-name suffix. The TV currently still has
+the earlier `io.github.jqssun.airplay.lab` installation: the new ID installs as a
+separate app and requires settings migration and re-pinning the launcher favorite.
+No TV migration was performed as part of this source change.
 
 ## Build
 

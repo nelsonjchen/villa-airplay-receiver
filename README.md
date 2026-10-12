@@ -87,9 +87,9 @@ restrictions.
 Validated on the target Sony: receiver running with display OFF, then a Mac
 mirroring connection triggered the wake request and display ON; the user also
 confirmed the screen turned on. Audio-only wake and screensaver dismissal have
-not been separately tested. A cold foreground-service start immediately after
-install hit Android's startup timeout; starting the app process first recovered
-it. Boot/deep-standby startup reliability remains a separate limitation.
+not been separately tested. Cold startup on this TV can also stall in Android DEX verification before the
+application runs; see the installation note below. Boot/deep-standby reliability
+has not been established by an overnight test.
 
 ## Screen-off lifecycle
 
@@ -110,6 +110,46 @@ Deep standby and audio-only screen-off behavior have not been separately tested.
 Picture-in-picture is disabled: leaving Villa does not open a floating player,
 and playback controls have no PiP button. This is our requested OEM-style policy;
 equivalent automatic PiP behavior was not established in Sony's reference player.
+
+## Receiver lifecycle
+
+- Leaving the player (Home or switching apps) ends the current session and releases
+  audio focus, while the background receiver remains available. Configuration
+  changes are excluded; observed Android screensaver broadcasts suppress this
+  cleanup while dreaming. This approximates Sony's player-stop behavior and
+  screensaver exception, not its proprietary screensaver state machine.
+- Back retains Villa's existing local navigation. Sony forwards an AirPlay Back
+  command; that protocol behavior has not been implemented.
+- Playback requests media audio focus; session cleanup releases it. Focus changes
+  are logged, without adding an automatic pause/duck policy not established in
+  Sony's inspected callback.
+- Default-network and link-property changes are debounced. The old listener and
+  mDNS registrations are released and rebuilt; losing the network leaves an enabled
+  foreground service waiting for its return. Manual Stop cancels recovery.
+  This tracks Android's default network, not Sony's full per-interface manager.
+- The service promotes itself before player/codec initialization and requests
+  sticky restart. These changes cannot avoid stalls before application code runs.
+
+On the target TV, live mirroring acquired audio focus; pressing Home disconnected
+the sender, released focus, and left the foreground receiver running. The debug
+build and unit tests passed. After package precompilation, a fresh process started
+the foreground service and registered both mDNS services successfully. Physical
+network-loss recovery, screensaver timing,
+and reboot/deep-standby behavior still need device validation.
+
+### Cold installation on the target TV
+
+An ANR trace captured the main thread in Android's DEX verifier before application
+startup. After installing a debug APK, precompile it before starting the service:
+
+```sh
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+adb shell cmd package compile -m speed -f com.mindflakes.villaairplay
+```
+
+Use the appropriate adb server/device options for your setup. Compilation may take
+several minutes on this 2016 TV. This is an installation step, separate from the
+service's early foreground promotion; it must be repeated after an APK update.
 
 ## Results and limits
 

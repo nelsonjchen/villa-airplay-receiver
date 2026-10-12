@@ -13,6 +13,10 @@ import android.content.SharedPreferences
 import android.content.pm.ServiceInfo
 import android.content.res.Configuration
 import android.graphics.BitmapFactory
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.net.ConnectivityManager
+import android.net.Network
 import android.media.AudioManager
 import android.os.Binder
 import android.os.Build
@@ -76,7 +80,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     private var foregroundStarted = false
     private var lastOrientation = Configuration.ORIENTATION_UNDEFINED
 
-    val videoRenderer = VideoRenderer(this)
+    val videoRenderer by lazy { VideoRenderer(this) }
     val audioRenderer = AudioRenderer()
     private val audioManager by lazy { getSystemService(Context.AUDIO_SERVICE) as AudioManager }
     val airPlayVideoPlayer by lazy { AirPlayVideoPlayer(this) }
@@ -209,26 +213,32 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     private val screenEpoch = java.util.concurrent.atomic.AtomicInteger()
     @Volatile private var endingScreenSession = false
     private var listeningPort = 0
+    var screensaverActive = false
+        private set
     private val screenReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action == Intent.ACTION_DREAMING_STARTED) screensaverActive = true
+            if (intent.action == Intent.ACTION_DREAMING_STOPPED) screensaverActive = false
             if (intent.action == Intent.ACTION_SCREEN_OFF) {
                 screenEpoch.incrementAndGet()
-                endSessionForScreenOff()
+                endPlaybackSession("screen off")
             }
         }
     }
 
-    private fun endSessionForScreenOff() {
+    fun endPlaybackSession(reason: String) {
+        screenEpoch.incrementAndGet()
         if (nativeHandle == 0L || _connectionCount.value == 0) return
-        log("Screen off: ending playback; keeping receiver discoverable")
+        log("Ending playback ($reason); keeping receiver discoverable")
         endingScreenSession = true
+        releasePlaybackFocus()
         try {
             // The current bridge has no session-only disconnect operation.
             // Stop joins client threads; restart the listener on the advertised port.
             NativeBridge.nativeStop(nativeHandle)
             videoRenderer.stopSession()
             audioRenderer.stop()
-            _endVideoPlayback("AirPlay Video stopped (screen off)")
+            _endVideoPlayback("AirPlay Video stopped ($reason)")
             _mirroringActive.value = false
             _audioOnly.value = false
             _connectionCount.value = 0
@@ -239,18 +249,102 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
             mirrorWakePending.set(true)
             val port = NativeBridge.nativeStart(nativeHandle, listeningPort)
             if (port != listeningPort) {
-                log("Listener restart failed after screen off")
+                log("Listener restart failed after $reason")
                 stopServer()
-            } else log("Screen-off cleanup complete; receiver listening")
+            } else log("Session cleanup complete ($reason); receiver listening")
         } finally {
             endingScreenSession = false
         }
     }
 
+    private var receiverRequested = false
+    private var serviceDestroyed = false
+    private val connectivity by lazy { getSystemService(ConnectivityManager::class.java) }
+    private var observedNetwork: Network? = null
+    private var observedLinks: android.net.LinkProperties? = null
+    private val reconcileNetwork = Runnable {
+        if (!receiverRequested || serviceDestroyed) return@Runnable
+        val current = connectivity.activeNetwork
+        val links = current?.let { connectivity.getLinkProperties(it) }
+        if (current == observedNetwork && links == observedLinks) return@Runnable
+        observedNetwork = current
+        observedLinks = links
+        log("Network changed; refreshing receiver")
+        screenEpoch.incrementAndGet()
+        stopServer(keepAvailable = true)
+        if (current != null) startServer(
+            prefs.getString(Prefs.SERVER_NAME, Prefs.DEF_SERVER_NAME) ?: Prefs.DEF_SERVER_NAME,
+            ensureServiceStarted = false
+        )
+    }
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) = scheduleNetworkRefresh()
+        override fun onLost(network: Network) = scheduleNetworkRefresh()
+        override fun onLinkPropertiesChanged(network: Network, properties: android.net.LinkProperties) {
+            scheduleNetworkRefresh()
+        }
+    }
+    private fun scheduleNetworkRefresh() {
+        _mainHandler.post {
+            _mainHandler.removeCallbacks(reconcileNetwork)
+            _mainHandler.postDelayed(reconcileNetwork, 750)
+        }
+    }
+
+    private var playbackFocus: AudioFocusRequest? = null
+    private var legacyFocusHeld = false
+    private val focusListener = AudioManager.OnAudioFocusChangeListener {
+        change -> log("Audio focus changed: $change")
+    }
+    private fun acquirePlaybackFocus() {
+        val epoch = screenEpoch.get()
+        _mainHandler.post {
+            if (serviceDestroyed || endingScreenSession || epoch != screenEpoch.get() ||
+                playbackFocus != null || legacyFocusHeld) return@post
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+                @Suppress("DEPRECATION")
+                val result = audioManager.requestAudioFocus(focusListener,
+                    AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN)
+                legacyFocusHeld = result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+                return@post
+            }
+            val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                .setAudioAttributes(AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MOVIE).build())
+                .setAcceptsDelayedFocusGain(false)
+                .setWillPauseWhenDucked(false)
+                .setOnAudioFocusChangeListener(focusListener)
+                .build()
+            if (audioManager.requestAudioFocus(request) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+                playbackFocus = request
+                log("Playback audio focus acquired")
+            } else log("Playback audio focus denied")
+        }
+    }
+    private fun releasePlaybackFocus() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            playbackFocus?.let { audioManager.abandonAudioFocusRequest(it) }
+        } else if (legacyFocusHeld) {
+            @Suppress("DEPRECATION")
+            audioManager.abandonAudioFocus(focusListener)
+        }
+        playbackFocus = null
+        legacyFocusHeld = false
+    }
+
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
-        ContextCompat.registerReceiver(this, screenReceiver, IntentFilter(Intent.ACTION_SCREEN_OFF), ContextCompat.RECEIVER_NOT_EXPORTED)
+        // Meet the foreground-service deadline before player/codec initialization.
+        promoteToForeground()
+        observedNetwork = connectivity.activeNetwork
+        observedLinks = observedNetwork?.let { connectivity.getLinkProperties(it) }
+        connectivity.registerDefaultNetworkCallback(networkCallback)
+        ContextCompat.registerReceiver(this, screenReceiver, IntentFilter(Intent.ACTION_SCREEN_OFF).apply {
+            addAction(Intent.ACTION_DREAMING_STARTED)
+            addAction(Intent.ACTION_DREAMING_STOPPED)
+        }, ContextCompat.RECEIVER_NOT_EXPORTED)
         dacpController = DacpController(this)
         dacpPlayer = DacpPlayer(
             mainLooper,
@@ -373,13 +467,13 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_START_SERVER) {
+        if (intent == null || intent.action == ACTION_START_SERVER) {
             promoteToForeground()
             val name = prefs.getString(Prefs.SERVER_NAME, Prefs.DEF_SERVER_NAME) ?: Prefs.DEF_SERVER_NAME
             startServer(name, ensureServiceStarted = false)
-            if (_serverState.value != ServerState.RUNNING) stopSelf(startId)
+            if (_serverState.value == ServerState.ERROR) stopSelf(startId)
         }
-        return START_NOT_STICKY
+        return START_STICKY
     }
 
     fun startServer(name: String) {
@@ -387,8 +481,17 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     }
 
     private fun startServer(name: String, ensureServiceStarted: Boolean) {
+        receiverRequested = true
         if (_serverState.value == ServerState.RUNNING) return
         val effectiveName = name.ifBlank { Prefs.DEF_SERVER_NAME }
+        if (ensureServiceStarted) {
+            ContextCompat.startForegroundService(this, Intent(this, AirPlayService::class.java))
+        }
+        promoteToForeground()
+        if (connectivity.activeNetwork == null) {
+            log("Waiting for network; receiver remains enabled")
+            return
+        }
 
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "airplay:server").apply { acquire() }
@@ -476,9 +579,6 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         nsdManager?.registerAirplay(resolvedName, port, airplayTxt)
 
         _serverState.value = ServerState.RUNNING
-        if (ensureServiceStarted) {
-            ContextCompat.startForegroundService(this, Intent(this, AirPlayService::class.java))
-        }
         promoteToForeground()
         log("Server started on port $port")
     }
@@ -533,7 +633,10 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         }
     }
 
-    fun stopServer() {
+    fun stopServer(keepAvailable: Boolean = false) {
+        receiverRequested = keepAvailable
+        screenEpoch.incrementAndGet()
+        releasePlaybackFocus()
         audioRenderer.detachEngine()
         if (nativeHandle != 0L) {
             NativeBridge.nativeStop(nativeHandle)
@@ -561,9 +664,11 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         _serverState.value = ServerState.STOPPED
         _connectionCount.value = 0
         _refreshDacpPlayer()
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        foregroundStarted = false
-        stopSelf()
+        if (!keepAvailable) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            foregroundStarted = false
+            stopSelf()
+        }
         log("Server stopped")
     }
 
@@ -624,6 +729,9 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     }
 
     override fun onDestroy() {
+        serviceDestroyed = true
+        connectivity.unregisterNetworkCallback(networkCallback)
+        _mainHandler.removeCallbacks(reconcileNetwork)
         unregisterReceiver(screenReceiver)
         stopServer()
         dacpPlayer.release()
@@ -647,7 +755,10 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     private val mirrorWakePending = java.util.concurrent.atomic.AtomicBoolean(true)
 
     override fun onVideoData(data: ByteArray, ntpTimeNs: Long, isH265: Boolean) {
-        if (data.isNotEmpty() && mirrorWakePending.compareAndSet(true, false)) wakeForPlayback()
+        if (data.isNotEmpty() && mirrorWakePending.compareAndSet(true, false)) {
+            acquirePlaybackFocus()
+            wakeForPlayback()
+        }
         videoRenderer.feedFrame(data, ntpTimeNs, isH265)
     }
 
@@ -656,6 +767,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     }
 
     override fun onVideoPlay(location: String, startPositionSeconds: Float) {
+        acquirePlaybackFocus()
         wakeForPlayback()
         _videoLocation.value = location
         _videoPlaySeq.value++
@@ -682,6 +794,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     override fun onVideoStop() = _endVideoPlayback("AirPlay Video stopped")
 
     override fun onAudioFormat(ct: Int, spf: Int, usingScreen: Boolean) {
+        acquirePlaybackFocus()
         clearPin()
         audioRenderer.start()
         audioRenderer.setFormat(ct, spf)
@@ -776,6 +889,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     override fun onConnectionDestroy() {
         _connectionCount.value = (_connectionCount.value - 1).coerceAtLeast(0)
         if (_connectionCount.value == 0) {
+            _mainHandler.post { if (_connectionCount.value == 0) releasePlaybackFocus() }
             // clients may drop without POST /stop; must run before the poll-state reset
             _endVideoPlayback("AirPlay Video stopped (disconnect)")
             // last client gone: release audio output devices to save power

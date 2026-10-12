@@ -100,7 +100,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         super.onStop()
-        // never stop mid-session
+        if (!isChangingConfigurations && service?.screensaverActive != true) {
+            service?.endPlaybackSession("player left foreground")
+        }
         if (!viewModel.runInBackground.value && !isChangingConfigurations &&
             viewModel.serverState.value == AirPlayService.ServerState.RUNNING &&
             viewModel.connectionCount.value == 0) {

@@ -875,15 +875,11 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     }
 
     override fun onConnectionInit() {
-        val firstConnection = _connectionCount.value == 0
         _connectionCount.value++
         log("Client connected (${_connectionCount.value})")
-        if (!firstConnection) return
-        // conn_init is only a tcp pre-auth signal. pin-required sessions must wait for
-        // onDisplayPin, otherwise the server ui can move before the client pin is current
-        if (requiresPin()) return
-        if (!shouldLaunchOnConnect()) return
-        launchMainActivity()
+        // TCP connection is pre-auth, not playback. Launching the player here in
+        // standby lets onStop tear down setup before the playback wake can run.
+        // Playback callbacks wake/launch; onDisplayPin handles pairing UI.
     }
 
     override fun onConnectionDestroy() {

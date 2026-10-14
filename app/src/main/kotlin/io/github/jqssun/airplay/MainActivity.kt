@@ -100,7 +100,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         super.onStop()
-        if (!isChangingConfigurations && service?.screensaverActive != true) {
+        // Standby can stop a newly launched activity before it becomes visible.
+        // SCREEN_OFF owns standby cleanup; onStop owns interactive app switching.
+        val interactive = getSystemService(android.os.PowerManager::class.java).isInteractive
+        if (interactive && !isChangingConfigurations && service?.screensaverActive != true) {
             service?.endPlaybackSession("player left foreground")
         }
         if (!viewModel.runInBackground.value && !isChangingConfigurations &&

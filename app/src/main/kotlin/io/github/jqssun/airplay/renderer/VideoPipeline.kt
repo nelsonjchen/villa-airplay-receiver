@@ -141,6 +141,9 @@ class VideoPipeline {
             // no display: keep consuming so decoder doesn't stall
             egl.makeCurrent()
             st.updateTexImage()
+            // _bindDisplay may repaint this cached frame before another arrives.
+            // Keep its transform with it, including while the TV is waking.
+            st.getTransformMatrix(texMatrix)
             hasFrame = true
             return
         }

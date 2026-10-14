@@ -114,7 +114,9 @@ equivalent automatic PiP behavior was not established in Sony's reference player
 ## Receiver lifecycle
 
 - Leaving the player (Home or switching apps) ends the current session and releases
-  audio focus, while the background receiver remains available. Configuration
+  audio focus, while the background receiver remains available. This cleanup only
+  applies while the display is interactive; screen-off cleanup belongs to the
+  screen-off receiver. Configuration
   changes are excluded; observed Android screensaver broadcasts suppress this
   cleanup while dreaming. This approximates Sony's player-stop behavior and
   screensaver exception, not its proprietary screensaver state machine.
@@ -129,6 +131,14 @@ equivalent automatic PiP behavior was not established in Sony's reference player
   This tracks Android's default network, not Sony's full per-interface manager.
 - The service promotes itself before player/codec initialization and requests
   sticky restart. These changes cannot avoid stalls before application code runs.
+- Pre-auth TCP connections do not launch the activity. Actual playback wakes and
+  opens the player (pairing retains its separate PIN UI). Previously, launching
+  the activity in standby caused Android to stop it immediately, triggering the
+  app-switch cleanup and resetting a new connection during stream setup.
+- Frames consumed before a display surface exists retain their texture transform,
+  so repainting the cached frame when the surface appears uses the correct
+  orientation. Previously only frames consumed with a display updated the matrix,
+  allowing a briefly flipped image during wake until the next frame arrived.
 
 On the target TV, live mirroring acquired audio focus; pressing Home disconnected
 the sender, released focus, and left the foreground receiver running. The debug
@@ -136,6 +146,13 @@ build and unit tests passed. After package precompilation, a fresh process start
 the foreground service and registered both mDNS services successfully. Physical
 network-loss recovery, screensaver timing,
 and reboot/deep-standby behavior still need device validation.
+
+The standby-start regression was reproduced in receiver logs and fixed: two live
+connections from a display-off state subsequently woke the TV and started video,
+and Home still ended playback while leaving discovery available. An OPTIONS-only
+pre-auth connection returned 200 and left the display off. Build/unit tests passed.
+The cached-frame transform omission was corrected alongside this fix; the transient
+flip was user-observed, and its first-frame appearance has not been instrumented.
 
 ### Cold installation on the target TV
 
